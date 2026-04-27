@@ -60,12 +60,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/fana-ai/fana-aibot.git"
+    "url": "https://github.com/NjabuloJf/fana-aibot.git"
   },
   "bugs": {
-    "url": "https://github.com/fana-ai/fana-aibot/issues"
+    "url": "https://github.com/NjabuloJf/fana-aibot/issues"
   },
-  "homepage": "https://github.com/fana-ai/fana-aibot#readme",
+  "homepage": "https://github.com/NjabuloJf/fana-aibot#readme",
   "funding": {
     "type": "individual",
     "url": "https://paypal.me/fanaai"
