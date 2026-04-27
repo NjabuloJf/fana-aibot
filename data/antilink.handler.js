@@ -258,7 +258,7 @@ ${config.BOT_FOOTER}`;
             console.error(chalk.red('❌ Error kicking user:'), error);
             
             // Fallback: send error message
-            await messageUtils.sendText(sock, chatId, 
+            await messageUtils.sendText(sock, chatId,
                 `❌ Failed to remove user. Make sure I have admin permissions.`);
         }
     }
