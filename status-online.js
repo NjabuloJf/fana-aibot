@@ -1,4 +1,4 @@
-status-online.jsonconst chalk = require('chalk');
+const chalk = require('chalk');
 const moment = require('moment-timezone');
 const os = require('os');
 const config = require('./config');
