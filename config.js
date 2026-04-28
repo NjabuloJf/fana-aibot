@@ -50,4 +50,4 @@ Links are not allowed in this group!`,
     SUCCESS: '✅ Success!',
     PROCESSING: '⏳ Processing...',
     DONE: '✅ Done!'
-};
+}; // ← ADD THIS CLOSING BRACE AND SEMICOLON
