@@ -23,7 +23,7 @@
   "author": "Fana AI Team",
   "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "npm:toxic-baileys",
+    "@whiskeysockets/baileys": "npm:baileys-mod",
     "express": "^4.18.2",
     "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",
