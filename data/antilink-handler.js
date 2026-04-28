@@ -144,7 +144,7 @@ class AntilinkHandler {
                     await this.kickUser(sock, chatId, senderId, 'Link sharing not allowed');
                     break;
                     
-                case 'ban':
+                                case 'ban':
                     await this.banUser(sock, chatId, senderId, 'Link sharing not allowed');
                     break;
                     
@@ -160,9 +160,6 @@ class AntilinkHandler {
         }
     }
 
-    // Delete message action
-    async deleteMessage(sock, message, chatId, senderId, links) {
-        try {
     // Delete message action
     async deleteMessage(sock, message, chatId, senderId, links) {
         try {
@@ -235,9 +232,6 @@ ${config.BOT_FOOTER}`;
     // Kick user action
     async kickUser(sock, chatId, senderId, reason) {
         try {
-            // Delete the message first
-            await messageUtils.deleteMessage(sock, message);
-            
             // Remove user from group
             await sock.groupParticipantsUpdate(chatId, [senderId], 'remove');
             
@@ -478,21 +472,9 @@ ${config.BOT_FOOTER}`;
                 console.log(chalk.yellow(`🧹 Cleaned ${violations.length - recentViolations.length} old violations`));
             }
             
-            // Clean old warning counts (reset warnings older than 7 days)
-            const warningAge = 7 * 24 * 60 * 60 * 1000; // 7 days
-            const warnings = await storage.getSetting('antilinkWarnings', {});
-            const activeWarnings = {};
-            
-            // Note: Since we don't store timestamps for warnings, we'll reset all warnings older than 7 days
-            // In a real implementation, you'd want to store warning timestamps
-            for (const [key, count] of Object.entries(warnings)) {
-                // Keep warnings for now - in future versions, add timestamp tracking
-                activeWarnings[key] = count;
-            }
-            
             return {
                 violationsRemoved: violations.length - recentViolations.length,
-                warningsReset: Object.keys(warnings).length - Object.keys(activeWarnings).length
+                warningsReset: 0
             };
             
         } catch (error) {
