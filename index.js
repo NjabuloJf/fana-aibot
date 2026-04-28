@@ -15,6 +15,7 @@ const { makeid } = require('./id');
 const express = require('express');
 const path = require('path');
 const P = require('pino');
+const QRCode = require('qrcode');
 
 // Import handlers
 const messageHandler = require('./data/handler');
@@ -34,6 +35,7 @@ let sock;
 let qrCode = '';
 let isConnected = false;
 let connectionTime = '';
+let pairingData = new Map(); // Store pairing sessions
 
 // Display banner
 console.log(chalk.cyan(figlet.textSync('FANA-AIBOT', { horizontalLayout: 'full' })));
@@ -45,12 +47,257 @@ console.log(chalk.magenta(`📱 Bot Name: ${config.BOT_NAME}`));
 
 // Express routes
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'public', 'main.html'));
+    res.sendFile(path.join(__dirname, 'main.html'));
 });
 
 app.get('/qr', (req, res) => {
     res.json({ qr: qrCode, connected: isConnected });
 });
+
+// API endpoint for QR code generation
+app.post('/api/generate-qr', async (req, res) => {
+    try {
+        console.log(chalk.yellow('📱 QR code generation requested'));
+        
+        if (isConnected) {
+            return res.json({
+                success: false,
+                error: 'Bot is already connected'
+            });
+        }
+
+        // Generate session ID
+        const sessionId = makeid(16);
+        
+        // Start bot with QR mode
+        const qrResult = await generateQRForPairing(sessionId);
+        
+        res.json({
+            success: true,
+            qr: qrResult.qr,
+            sessionId: sessionId,
+            expires: Date.now() + (5 * 60 * 1000) // 5 minutes
+        });
+    } catch (error) {
+        console.error(chalk.red('❌ QR generation error:'), error);
+        res.json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// API endpoint for pairing code generation
+app.post('/api/generate-code', async (req, res) => {
+    try {
+        const { phoneNumber } = req.body;
+        
+        if (!phoneNumber) {
+            return res.json({
+                success: false,
+                error: 'Phone number is required'
+            });
+        }
+
+        if (isConnected) {
+            return res.json({
+                success: false,
+                error: 'Bot is already connected'
+            });
+        }
+
+        console.log(chalk.yellow(`🔑 Pairing code generation requested for: ${phoneNumber}`));
+        
+        // Clean phone number
+        const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+        if (cleanNumber.length < 10) {
+            return res.json({
+                success: false,
+                error: 'Invalid phone number format'
+            });
+        }
+
+        // Generate session ID
+        const sessionId = makeid(16);
+        
+        // Generate pairing code
+        const codeResult = await generatePairingCodeForPhone(cleanNumber, sessionId);
+        
+        res.json({
+            success: true,
+            code: codeResult.code,
+            formattedCode: codeResult.formattedCode,
+            sessionId: sessionId,
+            expires: Date.now() + (5 * 60 * 1000) // 5 minutes
+        });
+    } catch (error) {
+        console.error(chalk.red('❌ Pairing code generation error:'), error);
+        res.json({
+            success: false,
+            error: error.message
+        });
+    }
+});
+
+// API endpoint for connection status
+app.get('/api/connection-status', (req, res) => {
+    res.json({
+        connected: isConnected,
+        connectionTime: connectionTime,
+        botName: config.BOT_NAME,
+        version: config.BOT_VERSION
+    });
+});
+
+// API endpoint for general status
+app.get('/api/status', (req, res) => {
+    res.json({
+        connected: isConnected,
+        uptime: process.uptime(),
+        status: isConnected ? 'connected' : 'disconnected',
+        botName: config.BOT_NAME,
+        version: config.BOT_VERSION,
+        activePairings: pairingData.size
+    });
+});
+
+// Generate QR code for pairing
+async function generateQRForPairing(sessionId) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const tempSessionPath = `./temp_session_${sessionId}`;
+            const { state, saveCreds } = await useMultiFileAuthState(tempSessionPath);
+            
+            const tempSock = makeWASocket({
+                auth: state,
+                printQRInTerminal: false,
+                logger: P({ level: 'silent' }),
+                browser: Browsers.macOS('Desktop'),
+            });
+
+            const timeout = setTimeout(() => {
+                tempSock.end();
+                fs.remove(tempSessionPath).catch(() => {});
+                reject(new Error('QR generation timeout'));
+            }, 60000); // 1 minute timeout
+
+            tempSock.ev.on('connection.update', async (update) => {
+                const { qr, connection } = update;
+                
+                if (qr) {
+                    clearTimeout(timeout);
+                    qrCode = qr;
+                    
+                    // Store pairing data
+                    pairingData.set(sessionId, {
+                        type: 'qr',
+                        qr: qr,
+                        timestamp: Date.now(),
+                        tempSock: tempSock,
+                        tempSessionPath: tempSessionPath
+                    });
+                    
+                    console.log(chalk.green('✅ QR Code generated successfully'));
+                    resolve({ qr: qr, sessionId: sessionId });
+                }
+                
+                if (connection === 'open') {
+                    // Move temp session to main session
+                    await fs.remove('./session').catch(() => {});
+                    await fs.move(tempSessionPath, './session');
+                    
+                    // Clean up
+                    pairingData.delete(sessionId);
+                    tempSock.end();
+                    
+                    // Restart main bot
+                    setTimeout(() => startBot(), 1000);
+                }
+            });
+
+            tempSock.ev.on('creds.update', saveCreds);
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
+
+// Generate pairing code for phone
+async function generatePairingCodeForPhone(phoneNumber, sessionId) {
+    return new Promise(async (resolve, reject) => {
+        try {
+            const tempSessionPath = `./temp_session_${sessionId}`;
+            const { state, saveCreds } = await useMultiFileAuthState(tempSessionPath);
+            
+            const tempSock = makeWASocket({
+                auth: state,
+                printQRInTerminal: false,
+                logger: P({ level: 'silent' }),
+                browser: Browsers.macOS('Desktop'),
+            });
+
+            const timeout = setTimeout(() => {
+                tempSock.end();
+                fs.remove(tempSessionPath).catch(() => {});
+                reject(new Error('Pairing code generation timeout'));
+            }, 60000); // 1 minute timeout
+
+                        try {
+                if (!tempSock.authState.creds.registered) {
+                    const code = await tempSock.requestPairingCode(phoneNumber);
+                    const formattedCode = code.match(/.{1,4}/g).join('-');
+                    
+                    clearTimeout(timeout);
+                    
+                    // Store pairing data
+                    pairingData.set(sessionId, {
+                        type: 'code',
+                        code: code,
+                        formattedCode: formattedCode,
+                        phoneNumber: phoneNumber,
+                        timestamp: Date.now(),
+                        tempSock: tempSock,
+                        tempSessionPath: tempSessionPath
+                    });
+                    
+                    console.log(chalk.green(`🔑 Pairing Code: ${formattedCode}`));
+                    resolve({ 
+                        code: code, 
+                        formattedCode: formattedCode, 
+                        sessionId: sessionId 
+                    });
+                } else {
+                    clearTimeout(timeout);
+                    reject(new Error('Device already registered'));
+                }
+            } catch (error) {
+                clearTimeout(timeout);
+                reject(error);
+            }
+
+            tempSock.ev.on('connection.update', async (update) => {
+                const { connection } = update;
+                
+                if (connection === 'open') {
+                    // Move temp session to main session
+                    await fs.remove('./session').catch(() => {});
+                    await fs.move(tempSessionPath, './session');
+                    
+                    // Clean up
+                    pairingData.delete(sessionId);
+                    tempSock.end();
+                    
+                    // Restart main bot
+                    setTimeout(() => startBot(), 1000);
+                }
+            });
+
+            tempSock.ev.on('creds.update', saveCreds);
+        } catch (error) {
+            reject(error);
+        }
+    });
+}
 
 app.post('/pair', async (req, res) => {
     try {
@@ -265,6 +512,28 @@ ${config.BOT_FOOTER}`
     }
 }
 
+// Clean up expired pairing sessions
+setInterval(() => {
+    const now = Date.now();
+    const maxAge = 5 * 60 * 1000; // 5 minutes
+    
+    for (const [sessionId, data] of pairingData.entries()) {
+        if (now - data.timestamp > maxAge) {
+            console.log(chalk.yellow(`🧹 Cleaning expired pairing session: ${sessionId}`));
+            
+            // Clean up temp socket and session
+            if (data.tempSock) {
+                data.tempSock.end();
+            }
+            if (data.tempSessionPath) {
+                fs.remove(data.tempSessionPath).catch(() => {});
+            }
+            
+            pairingData.delete(sessionId);
+        }
+    }
+}, 60000); // Check every minute
+
 // Error handling
 process.on('uncaughtException', (error) => {
     console.error(chalk.red('❌ Uncaught Exception:'), error);
@@ -281,6 +550,17 @@ process.on('unhandledRejection', (error) => {
 // Graceful shutdown
 process.on('SIGINT', async () => {
     console.log(chalk.yellow('\n🛑 Shutting down bot gracefully...'));
+    
+    // Clean up all pairing sessions
+    for (const [sessionId, data] of pairingData.entries()) {
+        if (data.tempSock) {
+            data.tempSock.end();
+        }
+        if (data.tempSessionPath) {
+            await fs.remove(data.tempSessionPath).catch(() => {});
+        }
+    }
+    
     if (sock) {
         await sock.logout();
     }
@@ -289,6 +569,17 @@ process.on('SIGINT', async () => {
 
 process.on('SIGTERM', async () => {
     console.log(chalk.yellow('\n🛑 Received SIGTERM, shutting down...'));
+    
+    // Clean up all pairing sessions
+    for (const [sessionId, data] of pairingData.entries()) {
+        if (data.tempSock) {
+            data.tempSock.end();
+        }
+        if (data.tempSessionPath) {
+            await fs.remove(data.tempSessionPath).catch(() => {});
+        }
+    }
+    
     if (sock) {
         await sock.logout();
     }
