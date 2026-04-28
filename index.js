@@ -35,7 +35,11 @@ let sock;
 let qrCode = '';
 let isConnected = false;
 let connectionTime = '';
+
+// Pairing data storage
 const pairingData = new Map();
+
+// Connection retry management
 const connectionRetries = new Map();
 const maxRetries = 5;
 
@@ -59,9 +63,8 @@ app.get('/qr', (req, res) => {
 // API endpoint for QR code generation
 app.post('/api/generate-qr', async (req, res) => {
     try {
-        console.log(chalk.blue('📱 QR code generation requested'));
-        const sessionId = makeid(16);
-        const result = await generateQRForPairing(sessionId);
+        console.log('📱 QR code generation requested');
+        const result = await generateQRForPairing();
         
         res.json({
             success: true,
@@ -70,7 +73,7 @@ app.post('/api/generate-qr', async (req, res) => {
             expires: Date.now() + (5 * 60 * 1000) // 5 minutes
         });
     } catch (error) {
-        console.error(chalk.red('❌ QR generation error:'), error);
+        console.error('❌ QR generation error:', error);
         res.json({
             success: false,
             error: error.message
@@ -90,9 +93,8 @@ app.post('/api/generate-code', async (req, res) => {
             });
         }
 
-        console.log(chalk.blue('🔑 Pairing code generation requested for:'), phoneNumber);
-        const sessionId = makeid(16);
-        const result = await generatePairingCodeForPhone(phoneNumber, sessionId);
+        console.log('🔑 Pairing code generation requested for:', phoneNumber);
+        const result = await generatePairingCodeForPhone(phoneNumber);
         
         res.json({
             success: true,
@@ -102,7 +104,7 @@ app.post('/api/generate-code', async (req, res) => {
             expires: Date.now() + (5 * 60 * 1000) // 5 minutes
         });
     } catch (error) {
-        console.error(chalk.red('❌ Pairing code generation error:'), error);
+        console.error('❌ Pairing code generation error:', error);
         res.json({
             success: false,
             error: error.message
@@ -115,11 +117,12 @@ app.get('/api/connection-status', async (req, res) => {
     try {
         res.json({
             connected: isConnected,
-            uptime: process.uptime(),
-            timestamp: Date.now()
+            paired: isConnected,
+            phoneNumber: sock?.user?.id?.split(':')[0] || null,
+            deviceId: sock?.user?.id || null
         });
     } catch (error) {
-        console.error(chalk.red('❌ Connection status error:'), error);
+        console.error('❌ Connection status error:', error);
         res.json({
             connected: false,
             error: error.message
@@ -134,11 +137,10 @@ app.get('/api/status', async (req, res) => {
             connected: isConnected,
             uptime: process.uptime(),
             status: isConnected ? 'connected' : 'disconnected',
-            timestamp: Date.now(),
             activePairings: pairingData.size
         });
     } catch (error) {
-        console.error(chalk.red('❌ Status error:'), error);
+        console.error('❌ Status error:', error);
         res.json({
             connected: false,
             status: 'error',
@@ -148,10 +150,13 @@ app.get('/api/status', async (req, res) => {
 });
 
 // Generate QR code for pairing
-async function generateQRForPairing(sessionId) {
+async function generateQRForPairing() {
     return new Promise(async (resolve, reject) => {
+        const sessionId = makeid(16);
+        const tempSessionPath = path.join(__dirname, 'temp_sessions', sessionId);
+        
         try {
-            const tempSessionPath = `./temp_session_${sessionId}`;
+            await fs.ensureDir(tempSessionPath);
             const { state, saveCreds } = await useMultiFileAuthState(tempSessionPath);
             
             const tempSock = makeWASocket({
@@ -159,13 +164,12 @@ async function generateQRForPairing(sessionId) {
                 printQRInTerminal: false,
                 logger: P({ level: 'silent' }),
                 browser: Browsers.macOS('Desktop'),
-                generateHighQualityLinkPreview: true,
             });
 
             const timeout = setTimeout(() => {
                 tempSock.end();
                 fs.remove(tempSessionPath).catch(() => {});
-                reject(new Error('QR generation timeout'));
+                reject(new Error('QR code generation timeout'));
             }, 5 * 60 * 1000); // 5 minutes
 
             tempSock.ev.on('connection.update', async (update) => {
@@ -173,20 +177,22 @@ async function generateQRForPairing(sessionId) {
                 
                 if (qr) {
                     try {
-                        clearTimeout(timeout);
+                        const qrDataURL = await QRCode.toDataURL(qr);
                         
                         // Store pairing data
                         pairingData.set(sessionId, {
                             type: 'qr',
                             qr: qr,
+                            qrDataURL: qrDataURL,
                             timestamp: Date.now(),
                             tempSock: tempSock,
                             tempSessionPath: tempSessionPath
                         });
-                        
-                        console.log(chalk.green('✅ QR Code generated successfully'));
+
+                        clearTimeout(timeout);
                         resolve({ 
                             qr: qr, 
+                            qrDataURL: qrDataURL, 
                             sessionId: sessionId 
                         });
                     } catch (error) {
@@ -217,22 +223,24 @@ async function generateQRForPairing(sessionId) {
 }
 
 // Generate pairing code for phone number
-async function generatePairingCodeForPhone(phoneNumber, sessionId) {
+async function generatePairingCodeForPhone(phoneNumber) {
     return new Promise(async (resolve, reject) => {
+        const sessionId = makeid(16);
+        const tempSessionPath = path.join(__dirname, 'temp_sessions', sessionId);
+        const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+        
         try {
-            const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
-            const tempSessionPath = `./temp_session_${sessionId}`;
+            await fs.ensureDir(tempSessionPath);
             const { state, saveCreds } = await useMultiFileAuthState(tempSessionPath);
             
-            const tempSock = makeWASocket({
+                        const tempSock = makeWASocket({
                 auth: state,
                 printQRInTerminal: false,
                 logger: P({ level: 'silent' }),
                 browser: Browsers.macOS('Desktop'),
-                generateHighQualityLinkPreview: true,
             });
 
-                       const timeout = setTimeout(() => {
+            const timeout = setTimeout(() => {
                 tempSock.end();
                 fs.remove(tempSessionPath).catch(() => {});
                 reject(new Error('Pairing code generation timeout'));
@@ -356,12 +364,28 @@ ${config.BOT_FOOTER}`;
     }
 }
 
-// Main bot function
+// Enhanced startBot function with better session handling
 async function startBot(phoneNumber = null) {
     try {
         console.log(chalk.blue('🚀 Starting bot connection...'));
         
-        const { state, saveCreds } = await useMultiFileAuthState('./session');
+        // Check if session exists and is valid
+        const sessionPath = './session';
+        let sessionExists = false;
+        
+        try {
+            const credsPath = path.join(sessionPath, 'creds.json');
+            if (await fs.pathExists(credsPath)) {
+                const creds = await fs.readJson(credsPath);
+                sessionExists = creds && creds.me;
+                console.log(chalk.blue(`📁 Session exists: ${sessionExists}`));
+            }
+        } catch (error) {
+            console.log(chalk.yellow('📁 No valid session found, will create new one'));
+            sessionExists = false;
+        }
+        
+        const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
         
         sock = makeWASocket({
             auth: state,
@@ -373,13 +397,17 @@ async function startBot(phoneNumber = null) {
             defaultQueryTimeoutMs: 60000,
             keepAliveIntervalMs: 30000,
             markOnlineOnConnect: true,
+            syncFullHistory: false,
+            getMessage: async (key) => {
+                return { conversation: 'Hello' };
+            }
         });
 
-        // Handle pairing code
-        if (phoneNumber && !sock.authState.creds.registered) {
+        // Handle pairing code for new sessions
+        if (phoneNumber && !sessionExists) {
             console.log(chalk.yellow(`📱 Generating pairing code for ${phoneNumber}...`));
             try {
-                const code = await sock.requestPairingCode(phoneNumber);
+                const code = await sock.requestPairingCode(phoneNumber.replace(/[^0-9]/g, ''));
                 const formattedCode = code.match(/.{1,4}/g).join('-');
                 console.log(chalk.green(`🔑 Pairing Code: ${formattedCode}`));
             } catch (error) {
@@ -398,7 +426,45 @@ async function startBot(phoneNumber = null) {
             
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                let shouldReconnect = false;
+                
+                        // Determine if we should reconnect based on error code
+                switch (statusCode) {
+                    case DisconnectReason.badSession:
+                        console.log(chalk.red('❌ Bad session, deleting and restarting...'));
+                        await fs.remove(sessionPath).catch(() => {});
+                        shouldReconnect = true;
+                        break;
+                    case DisconnectReason.connectionClosed:
+                        console.log(chalk.yellow('🔄 Connection closed, reconnecting...'));
+                        shouldReconnect = true;
+                        break;
+                    case DisconnectReason.connectionLost:
+                        console.log(chalk.yellow('🔄 Connection lost, reconnecting...'));
+                        shouldReconnect = true;
+                        break;
+                    case DisconnectReason.connectionReplaced:
+                        console.log(chalk.red('❌ Connection replaced, stopping...'));
+                        shouldReconnect = false;
+                        break;
+                    case DisconnectReason.loggedOut:
+                        console.log(chalk.red('❌ Logged out, deleting session...'));
+                        await fs.remove(sessionPath).catch(() => {});
+                        shouldReconnect = false;
+                        break;
+                    case DisconnectReason.restartRequired:
+                        console.log(chalk.yellow('🔄 Restart required, restarting...'));
+                        shouldReconnect = true;
+                        break;
+                    case DisconnectReason.timedOut:
+                        console.log(chalk.yellow('⏰ Connection timed out, reconnecting...'));
+                        shouldReconnect = true;
+                        break;
+                    default:
+                        console.log(chalk.red('❌ Unknown disconnect reason:'), statusCode);
+                        shouldReconnect = true;
+                        break;
+                }
                 
                 console.log(chalk.red('❌ Connection closed:'), {
                     statusCode,
@@ -412,13 +478,15 @@ async function startBot(phoneNumber = null) {
                     
                     if (retryCount <= maxRetries) {
                         connectionRetries.set(retryKey, retryCount);
-                        const delay = Math.min(retryCount * 2000, 10000);
+                        const delay = Math.min(retryCount * 5000, 30000); // Max 30 seconds
                         
                         console.log(chalk.yellow(`🔄 Reconnecting in ${delay/1000}s... (${retryCount}/${maxRetries})`));
                         setTimeout(() => startBot(phoneNumber), delay);
                     } else {
-                        console.log(chalk.red('❌ Max reconnection attempts reached. Please restart manually.'));
+                        console.log(chalk.red('❌ Max reconnection attempts reached. Deleting session and restarting...'));
+                        await fs.remove(sessionPath).catch(() => {});
                         connectionRetries.delete(retryKey);
+                        setTimeout(() => startBot(), 10000); // Restart after 10 seconds
                     }
                 }
                 isConnected = false;
@@ -426,8 +494,9 @@ async function startBot(phoneNumber = null) {
                 console.log(chalk.green('✅ Connected to WhatsApp!'));
                 isConnected = true;
                 qrCode = '';
-                connectionRetries.clear();
+                connectionRetries.clear(); // Reset retry counter on successful connection
                 
+                // Auto-join and send connection message
                 await autoJoinChannelAndGroup();
                 await sendConnectionMessage();
             } else if (connection === 'connecting') {
@@ -541,7 +610,7 @@ ${config.BOT_FOOTER}`
         
         if (retryCount <= maxRetries) {
             connectionRetries.set(retryKey, retryCount);
-            const delay = Math.min(retryCount * 3000, 15000);
+            const delay = Math.min(retryCount * 3000, 15000); // Max 15 seconds
             
             console.log(chalk.yellow(`🔄 Retrying startup in ${delay/1000}s... (${retryCount}/${maxRetries})`));
             setTimeout(() => startBot(phoneNumber), delay);
