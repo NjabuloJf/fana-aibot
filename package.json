@@ -1,5 +1,6 @@
 {
   "name": "fana-aibot",
+  "private": true,
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -8,7 +9,7 @@
     "restart": "pm2 restart fana-aibot"
   },
   "author": "Gifted Tech",
-  "license": "GPL-3.0 license",
+  "license": "GPL-3.0-or-later",
   "dependencies": {
     "@whiskeysockets/baileys": "npm:baileys@6.7.21",
     "express": "^4.18.2",
